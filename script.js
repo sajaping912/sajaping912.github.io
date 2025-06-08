@@ -414,8 +414,8 @@ const PETAL_DRIFT_X_PPS_BASE = 30;
 const PETAL_FLUTTER_AMPLITUDE_BASE = 3.5;
 const PETAL_FLUTTER_SPEED_BASE = 3.0;
 
-const SENTENCE_VERTICAL_ADJUSTMENT = -86;
-const ANSWER_OFFSET_Y = 82;
+const SENTENCE_VERTICAL_ADJUSTMENT = -86 + 100; // 100px 아래로 이동 (14)
+const ANSWER_OFFSET_Y = 72; // 답변 문장을 위로 10px 이동 (82에서 72로)
 const LINE_HEIGHT = 30;
 const PLAYER_TOUCH_Y_OFFSET = 15;
 
@@ -1026,7 +1026,7 @@ const WORD_ANIM_MAX_HEIGHT = 18;
 
 // --- START: 의문사 복제본 관련 변수들 ---
 let questionWordClones = []; // 생성된 의문사 복제본들을 저장
-const CLONE_OFFSET_Y = 50; // 의문사 복제본이 원본에서 위로 얼마나 떨어져 있을지
+const CLONE_OFFSET_Y = 40; // 의문사 복제본이 원본에서 위로 얼마나 떨어져 있을지 (50에서 40으로 변경하여 10px 아래로)
 let cloneCreatedForCurrentQuestion = false; // 현재 질문에서 복제본이 이미 생성되었는지 추적
 // --- END: 의문사 복제본 관련 변수들 ---
 
@@ -1035,7 +1035,20 @@ let subjectAuxClones = []; // 생성된 주어+조동사 복제본들을 저장
 const SUBJECT_AUX_CLONE_OFFSET_Y = 60; // 주어+조동사 복제본이 원본에서 위로 얼마나 떨어져 있을지 (의문사 복제본보다 10px 더 위)
 const SUBJECT_AUX_CLONE_OFFSET_X = 15; // 주어+조동사 복제본이 의문사 복제본에서 오른쪽으로 15px 떨어져 있을지
 let cloneCreatedForCurrentAnswer = false; // 현재 답변에서 복제본이 이미 생성되었는지 추적
+const WORD_SWAP_ANIMATION_DURATION = 2000; // 단어 순서 바뀜 애니메이션 지속시간 (2초)
 // --- END: 주어+조동사 복제본 관련 변수들 ---
+
+// --- START: 화살표 애니메이션 관련 변수들 ---
+let arrowAnimationActive = false; // 화살표 애니메이션이 활성 상태인지
+let arrowAnimationProgress = 0; // 화살표 애니메이션 진행도 (0~1)
+let arrowAnimationStartTime = 0; // 화살표 애니메이션 시작 시간
+const ARROW_ANIMATION_DURATION = 1050; // 화살표 애니메이션 지속 시간 (ms) - 30% 더 빠르게
+const ARROW_ANIMATION_DELAY = 1400; // 다음 애니메이션까지의 지연 시간 (ms) - 30% 더 빠르게
+let arrowStartX = 0; // 화살표 시작점 X 좌표 (물음표 오른쪽 끝)
+let arrowStartY = 0; // 화살표 시작점 Y 좌표
+let arrowEndX = 0; // 화살표 끝점 X 좌표 (첫 글자 왼쪽 위)
+let arrowEndY = 0; // 화살표 끝점 Y 좌표
+// --- END: 화살표 애니메이션 관련 변수들 ---
 
 // --- START: 동사 복제본 관련 변수들 ---
 let verbClones = []; // 생성된 동사 복제본들을 저장
@@ -1236,20 +1249,22 @@ function clearQuestionWordClones() {
   // 의문사 복제본이 사라질 때 주어+조동사 복제본과 동사 복제본도 동시에 제거
   clearSubjectAuxClones();
   clearVerbClones();
+  // 화살표 애니메이션도 중지
+  stopArrowAnimation();
   console.log("🧹 Question word clones cleared");
 }
 
 // --- START: 주어+조동사 복제본 관련 함수들 ---
 
-// 주어+조동사 복제본 생성 함수 (순서 바뀜: 주어 + 조동사)
+// 주어+조동사 복제본 생성 함수 (원래 순서 유지: 조동사 + 주어)
 function createSubjectAuxClone(subjectAnimation, auxAnimation) {
   if (!subjectAnimation || !auxAnimation || !subjectAnimation.targetWordRect || !auxAnimation.targetWordRect) return;
   
   // 현재 조동사 애니메이션의 고점 위치 계산
   const currentAnimationHighPoint = auxAnimation.targetWordRect.y - auxAnimation.maxHeight;
   
-  // 주어 + 조동사 텍스트 결합 (순서 바뀜)
-  const combinedText = subjectAnimation.wordText + " " + auxAnimation.wordText;
+  // 조동사 + 주어 텍스트 결합 (원래 순서 유지)
+  const combinedText = auxAnimation.wordText + " " + subjectAnimation.wordText;
   
   // 의문사 복제본이 있는 경우 그 끝 위치를 찾아서 10px 떨어뜨리기
   let targetX = auxAnimation.targetWordRect.x; // 기본값: 조동사 위치
@@ -1261,11 +1276,9 @@ function createSubjectAuxClone(subjectAnimation, auxAnimation) {
       const lastChar = questionClone.charPositions[questionClone.charPositions.length - 1];
       targetX = lastChar.x + lastChar.width + SUBJECT_AUX_CLONE_OFFSET_X;
     }
-  }
-  
-  const clone = {
-    subjectWord: subjectAnimation.wordText,
-    auxWord: auxAnimation.wordText,
+  }    const clone = {
+    auxWord: auxAnimation.wordText,      // 조동사를 첫 번째로
+    subjectWord: subjectAnimation.wordText,  // 주어를 두 번째로
     combinedText: combinedText,
     originalX: targetX, // 의문사 복제본 끝에서 10px 떨어진 위치
     originalY: currentAnimationHighPoint,
@@ -1274,27 +1287,71 @@ function createSubjectAuxClone(subjectAnimation, auxAnimation) {
     charPositions: [], // 결합된 텍스트의 각 문자 위치
     createdTime: performance.now(),
     animationPhase: 'moving_up',
-    alpha: 1.0
+    alpha: 1.0,
+    // 순서 바뀜 애니메이션 관련 속성들
+    swapAnimationStartTime: null, // 순서 바뀜 애니메이션 시작 시간
+    isSwapAnimationActive: false, // 순서 바뀜 애니메이션 활성화 여부
+    auxCharPositions: [], // 조동사 문자들의 개별 위치
+    subjectCharPositions: [] // 주어 문자들의 개별 위치
   };
-  
-  // 결합된 텍스트의 문자 위치 계산
+    // 결합된 텍스트의 문자 위치 계산
   ctx.font = englishFont;
   const letters = combinedText.split('');
   let currentX = clone.originalX;
   
-  letters.forEach((char) => {
+  // 조동사 문자들의 위치 계산
+  const auxLetters = clone.auxWord.split('');
+  auxLetters.forEach((char) => {
     const charWidth = ctx.measureText(char).width;
-    clone.charPositions.push({
+    const charPos = {
       char: char,
       x: currentX,
       originalY: currentAnimationHighPoint,
       currentY: currentAnimationHighPoint,
-      width: charWidth
-    });
+      width: charWidth,
+      originalX: currentX // 원본 X 위치 저장
+    };
+    clone.charPositions.push(charPos);
+    clone.auxCharPositions.push(charPos);
+    currentX += charWidth;
+  });
+  
+  // 공백 문자 추가
+  const spaceWidth = ctx.measureText(' ').width;
+  const spacePos = {
+    char: ' ',
+    x: currentX,
+    originalY: currentAnimationHighPoint,
+    currentY: currentAnimationHighPoint,
+    width: spaceWidth,
+    originalX: currentX
+  };
+  clone.charPositions.push(spacePos);
+  currentX += spaceWidth;
+  
+  // 주어 문자들의 위치 계산
+  const subjectLetters = clone.subjectWord.split('');
+  subjectLetters.forEach((char) => {
+    const charWidth = ctx.measureText(char).width;
+    const charPos = {
+      char: char,
+      x: currentX,
+      originalY: currentAnimationHighPoint,
+      currentY: currentAnimationHighPoint,
+      width: charWidth,
+      originalX: currentX // 원본 X 위치 저장
+    };
+    clone.charPositions.push(charPos);
+    clone.subjectCharPositions.push(charPos);
     currentX += charWidth;
   });
   
   subjectAuxClones.push(clone);
+  
+  // 주어+조동사 복제본이 생성되면 화살표 애니메이션 시작
+  setTimeout(() => {
+    startArrowAnimation();
+  }, 400); // 복제본 이동 애니메이션이 완료된 후 화살표 시작 (300ms + 100ms 여유)
 }
 
 // 주어+조동사 복제본 업데이트 함수
@@ -1309,8 +1366,7 @@ function updateSubjectAuxClones(currentTime) {
         const t = elapsedTime / moveUpDuration;
         const easedT = 1 - Math.pow(1 - t, 3); // ease-out cubic
         clone.currentY = clone.originalY + (clone.targetY - clone.originalY) * easedT;
-        
-        // 각 문자의 위치도 업데이트
+          // 각 문자의 위치도 업데이트
         clone.charPositions.forEach(cp => {
           cp.currentY = cp.originalY + (clone.targetY - clone.originalY) * easedT;
         });
@@ -1321,6 +1377,94 @@ function updateSubjectAuxClones(currentTime) {
         clone.charPositions.forEach(cp => {
           cp.currentY = clone.targetY;
         });
+        
+        // 정착 후 1초 뒤 순서 바뀜 애니메이션 시작
+        if (!clone.swapAnimationStartTime) {
+          setTimeout(() => {
+            clone.swapAnimationStartTime = performance.now();
+            clone.isSwapAnimationActive = true;
+          }, 1000); // 1초 후 순서 바뀜 애니메이션 시작
+        }
+      }
+    } else if (clone.animationPhase === 'stationary' && clone.isSwapAnimationActive) {
+      // 순서 바뀜 애니메이션 처리
+      const swapElapsedTime = currentTime - clone.swapAnimationStartTime;
+        if (swapElapsedTime < WORD_SWAP_ANIMATION_DURATION) {
+        const t = swapElapsedTime / WORD_SWAP_ANIMATION_DURATION;
+        const easedT = 1 - Math.pow(1 - t, 3); // ease-out cubic - 부드럽고 일관된 이동
+        
+        // 주어의 최종 위치 계산 (맨 앞으로)
+        const subjectFinalX = clone.originalX;
+        
+        // 조동사의 최종 위치 계산 (주어 뒤로)
+        ctx.font = englishFont;
+        const subjectWidth = ctx.measureText(clone.subjectWord).width;
+        const spaceWidth = ctx.measureText(' ').width;
+        const auxFinalX = subjectFinalX + subjectWidth + spaceWidth;        // 주어 문자들을 반원 경로로 이동 (위쪽으로 호를 그리며 앞으로)
+        const subjectStartX = clone.subjectCharPositions[0].originalX;
+        const subjectTargetX = subjectFinalX;
+        
+        // 직선 이동과 아크 높이를 분리하여 계산
+        const linearX = subjectStartX + (subjectTargetX - subjectStartX) * easedT;
+        const arcProgress = Math.sin(Math.PI * easedT); // 0에서 1로 올라갔다가 다시 0으로
+        const arcY = clone.targetY - 30 * arcProgress; // 최대 30px 위로
+        
+        // 모든 주어 문자들을 블록으로 이동
+        let offsetX = 0;
+        clone.subjectCharPositions.forEach((charPos) => {
+          charPos.x = linearX + offsetX;
+          charPos.currentY = arcY;
+          offsetX += charPos.width;
+        });
+          // 조동사 문자들을 직선으로 뒤쪽으로 이동
+        clone.auxCharPositions.forEach((charPos, index) => {
+          // 각 조동사 문자의 최종 목표 위치 계산
+          let targetCharX = auxFinalX;
+          for (let i = 0; i < index; i++) {
+            targetCharX += clone.auxCharPositions[i].width;
+          }
+          charPos.x = charPos.originalX + (targetCharX - charPos.originalX) * easedT;
+        });
+        
+      } else {
+        // 순서 바뀜 애니메이션 완료
+        clone.isSwapAnimationActive = false;
+        
+        // 최종 위치로 고정
+        const subjectFinalX = clone.originalX;
+        ctx.font = englishFont;
+        const subjectWidth = ctx.measureText(clone.subjectWord).width;
+        const spaceWidth = ctx.measureText(' ').width;
+        const auxFinalX = subjectFinalX + subjectWidth + spaceWidth;
+          // 주어를 앞으로
+        let currentSubjectX = subjectFinalX;
+        clone.subjectCharPositions.forEach((charPos) => {
+          charPos.x = currentSubjectX;
+          charPos.currentY = clone.targetY;
+          currentSubjectX += charPos.width;
+        });
+        
+        // 조동사를 뒤로
+        let currentAuxX = auxFinalX;
+        clone.auxCharPositions.forEach((charPos) => {
+          charPos.x = currentAuxX;
+          charPos.currentY = clone.targetY;
+          currentAuxX += charPos.width;
+        });
+        
+        // charPositions 배열 재정렬 (주어 + 공백 + 조동사 순서로)
+        clone.charPositions = [
+          ...clone.subjectCharPositions,
+          clone.charPositions.find(cp => cp.char === ' '), // 공백 찾기
+          ...clone.auxCharPositions
+        ];
+        
+        // 공백 위치 조정
+        const spaceChar = clone.charPositions.find(cp => cp.char === ' ');
+        if (spaceChar) {
+          spaceChar.x = subjectFinalX + subjectWidth;
+          spaceChar.currentY = clone.targetY;
+        }
       }
     }
   }
@@ -1630,6 +1774,84 @@ function updateBounceAnimations(currentTime) {
 function clearBounceAnimations() {
   activeBounceAnimations = [];
 }
+
+// --- START: 화살표 애니메이션 관련 함수들 ---
+
+// 화살표 애니메이션 시작 함수
+function startArrowAnimation() {
+  if (!questionWordClones.length || !subjectAuxClones.length) {
+    console.log("❌ Cannot start arrow animation: missing clones");
+    return;
+  }  // 물음표("?") 문자의 정확한 위치 찾기
+  const questionClone = questionWordClones[0];
+  if (questionClone.charPositions && questionClone.charPositions.length > 0) {
+    // 디버깅: 모든 문자 출력
+    console.log("🔍 All characters in question clone:", questionClone.charPositions.map(cp => cp.char));
+    
+    // 물음표 문자를 찾기
+    let questionMarkChar = null;
+    for (let i = 0; i < questionClone.charPositions.length; i++) {
+      const char = questionClone.charPositions[i];
+      if (char.char === '?') {
+        questionMarkChar = char;
+        console.log("✅ Found question mark at position:", i, "coordinates:", char.x, char.y);
+        break;
+      }
+    }
+    
+    // 물음표를 찾지 못한 경우 마지막 문자 사용 (fallback)
+    if (!questionMarkChar) {
+      questionMarkChar = questionClone.charPositions[questionClone.charPositions.length - 1];
+      console.log("⚠️ Question mark not found, using last character:", questionMarkChar.char);
+    }    // 물음표의 중간 지점에서 시작 (25px 위로 이동 - 10px 아래로 - 5px 더 아래로 = 10px 위로, x축 우측으로 17px 이동)
+    arrowStartX = questionMarkChar.x + (questionMarkChar.width / 2) + 17; // 물음표 중간 지점 + 17px 우측 (3px 왼쪽으로 이동)
+    arrowStartY = questionClone.currentY - 25 + 10 + 5; // 25px 위로 이동 후 10px 아래로 + 5px 더 아래로 = 10px 위로
+    console.log("🏹 Arrow start position set to:", arrowStartX, arrowStartY);
+  }  // 주어+조동사 복제본의 첫 번째 글자 좌측 아래쪽 모서리 위치 계산 (우하향, 25px 위로 이동)
+  const subjectAuxClone = subjectAuxClones[0];
+  if (subjectAuxClone.charPositions && subjectAuxClone.charPositions.length > 0) {
+    const firstChar = subjectAuxClone.charPositions[0];    // 원래 끝점 계산 (10px 아래로 이동 + 5px 더 아래로, x축 우측으로 20px 이동)
+    const originalEndX = firstChar.x + 10 + 20; // 첫 글자 좌측 모서리에서 우측으로 10px 이동 + 20px 추가 이동
+    const originalEndY = firstChar.currentY + 15 - 25 + 10 + 5; // 첫 글자 아래쪽 모서리로 15px 아래 - 25px 위 + 10px 아래 + 5px 더 아래 = 5px 아래
+    
+    // 화살표 길이를 더 줄이기 위해 끝점을 시작점 쪽으로 94.38% 이동 (7.03%에서 20% 더 줄임)
+    arrowEndX = arrowStartX + (originalEndX - arrowStartX) * 0.0562; // 5.62% 거리로 줄임 (7.03%에서 20% 더 줄임)
+    arrowEndY = arrowStartY + (originalEndY - arrowStartY) * 0.0562; // 5.62% 거리로 줄임
+  }
+  
+  arrowAnimationActive = true;
+  arrowAnimationStartTime = performance.now();
+  arrowAnimationProgress = 0;
+  
+  console.log(`🏹 Arrow animation started: (${arrowStartX}, ${arrowStartY}) → (${arrowEndX}, ${arrowEndY})`);
+}
+
+// 화살표 애니메이션 업데이트 함수
+function updateArrowAnimation(currentTime) {
+  if (!arrowAnimationActive) return;
+  
+  const elapsedTime = currentTime - arrowAnimationStartTime;
+  const totalCycleTime = ARROW_ANIMATION_DURATION + ARROW_ANIMATION_DELAY;
+  const cycleProgress = (elapsedTime % totalCycleTime) / totalCycleTime;
+  
+  if (cycleProgress < (ARROW_ANIMATION_DURATION / totalCycleTime)) {
+    // 애니메이션 진행 중
+    const animProgress = (elapsedTime % totalCycleTime) / ARROW_ANIMATION_DURATION;
+    arrowAnimationProgress = Math.min(animProgress, 1.0);
+  } else {
+    // 지연 시간 중 (화살표 숨김)
+    arrowAnimationProgress = 0;
+  }
+}
+
+// 화살표 애니메이션 중지 함수
+function stopArrowAnimation() {
+  arrowAnimationActive = false;
+  arrowAnimationProgress = 0;
+  console.log("🏹 Arrow animation stopped");
+}
+
+// --- END: 화살표 애니메이션 관련 함수들 ---
 
 // --- END: 바운스 애니메이션 관련 함수들 ---
 // --- END: Word Animation Variables and Functions ---
@@ -2127,6 +2349,50 @@ function drawCenterSentence() {
             
             ctx.textAlign = "left"; // 다시 기본값으로 복원
         });
+          ctx.restore();
+    }
+
+    // 화살표 애니메이션 렌더링 (의문사 복제본과 주어+조동사 복제본 사이)
+    if (arrowAnimationActive && arrowAnimationProgress > 0) {
+        ctx.save();
+        ctx.globalAlpha = centerAlpha * 0.8; // 약간 투명하게
+          // 현재 애니메이션 진행도에 따른 화살표 위치 계산
+        const currentX = arrowStartX + (arrowEndX - arrowStartX) * arrowAnimationProgress;
+        const currentY = arrowStartY + (arrowEndY - arrowStartY) * arrowAnimationProgress;
+        
+        // 화살표 방향 계산
+        const deltaX = arrowEndX - arrowStartX;
+        const deltaY = arrowEndY - arrowStartY;
+        const angle = Math.atan2(deltaY, deltaX);        // 화살표 끝점을 2px 더 진행하도록 연장하고, 전체 화살표를 x축 좌측으로 2px, y축 위쪽으로 1px 이동
+        const extendedCurrentX = currentX + Math.cos(angle) * 2 - 2;
+        const extendedCurrentY = currentY + Math.sin(angle) * 2 - 1;// 화살표 그리기
+        ctx.strokeStyle = '#ffff00'; // 노란색 화살표
+        ctx.fillStyle = '#ffff00';
+        ctx.lineWidth = 1.6; // 20% 감소 (2 → 1.6)
+        ctx.lineCap = 'round';
+        
+        const arrowLength = 12; // 20% 감소 (15 → 12)
+        const arrowHeadLength = 6.4; // 20% 감소 (8 → 6.4)
+        const arrowHeadAngle = Math.PI / 6; // 30도
+          // 화살표 몸체 그리기
+        ctx.beginPath();
+        ctx.moveTo(extendedCurrentX - Math.cos(angle) * arrowLength, extendedCurrentY - Math.sin(angle) * arrowLength);
+        ctx.lineTo(extendedCurrentX, extendedCurrentY);
+        ctx.stroke();
+        
+        // 화살표 머리 그리기
+        ctx.beginPath();
+        ctx.moveTo(extendedCurrentX, extendedCurrentY);
+        ctx.lineTo(
+          extendedCurrentX - arrowHeadLength * Math.cos(angle - arrowHeadAngle),
+          extendedCurrentY - arrowHeadLength * Math.sin(angle - arrowHeadAngle)
+        );
+        ctx.moveTo(extendedCurrentX, extendedCurrentY);
+        ctx.lineTo(
+          extendedCurrentX - arrowHeadLength * Math.cos(angle + arrowHeadAngle),
+          extendedCurrentY - arrowHeadLength * Math.sin(angle + arrowHeadAngle)
+        );
+        ctx.stroke();
         
         ctx.restore();
     }
@@ -2137,26 +2403,66 @@ function drawCenterSentence() {
         ctx.globalAlpha = centerAlpha;
         ctx.font = englishFont;
         ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
-        
-        subjectAuxClones.forEach(clone => {
-            // 복제본 텍스트 그리기 (주어는 흰색, 조동사는 파란색)
-            let currentCharIndex = 0;
-            const subjectLength = clone.subjectWord.length;
-            const spaceLength = 1; // 공백 문자 1개
+        ctx.textBaseline = "middle";        subjectAuxClones.forEach(clone => {
+            // 순서 바뀜 애니메이션 상태 확인
+            const isSwapAnimationActive = clone.isSwapAnimationActive;
+            const isSwapCompleted = clone.swapAnimationStartTime && 
+                                  !clone.isSwapAnimationActive && 
+                                  (performance.now() - clone.swapAnimationStartTime) >= WORD_SWAP_ANIMATION_DURATION;
             
-            clone.charPositions.forEach((charPos, index) => {
-                if (index < subjectLength) {
-                    // 주어 부분 - 흰색
+            if (isSwapAnimationActive) {
+                // 애니메이션 중: 조동사와 주어 문자들을 개별적으로 렌더링
+                
+                // 조동사 문자들 렌더링 (파란색)
+                ctx.fillStyle = '#40b8ff';
+                clone.auxCharPositions.forEach(charPos => {
+                    ctx.fillText(charPos.char, charPos.x, charPos.currentY);
+                });
+                
+                // 주어 문자들 렌더링 (흰색)
+                ctx.fillStyle = '#ffffff';
+                clone.subjectCharPositions.forEach(charPos => {
+                    ctx.fillText(charPos.char, charPos.x, charPos.currentY);
+                });
+                
+                // 공백 렌더링 (흰색)
+                const spaceChar = clone.charPositions.find(cp => cp.char === ' ');
+                if (spaceChar) {
                     ctx.fillStyle = '#ffffff';
-                } else if (index < subjectLength + spaceLength) {
-                    // 공백 부분 - 흰색
-                    ctx.fillStyle = '#ffffff';
-                } else {
-                    // 조동사 부분 - 파란색
-                    ctx.fillStyle = '#40b8ff';
+                    ctx.fillText(spaceChar.char, spaceChar.x, spaceChar.currentY);
                 }
-                ctx.fillText(charPos.char, charPos.x, charPos.currentY);            });
+                
+            } else {
+                // 일반 렌더링 (애니메이션 전/후)
+                clone.charPositions.forEach((charPos, index) => {
+                    if (!isSwapCompleted) {
+                        // 원래 순서: 조동사(파란색) + 주어(흰색)
+                        const auxLength = clone.auxWord.length;
+                        const spaceLength = 1;
+                        
+                        if (index < auxLength) {
+                            ctx.fillStyle = '#40b8ff'; // 조동사 - 파란색
+                        } else if (index < auxLength + spaceLength) {
+                            ctx.fillStyle = '#ffffff'; // 공백 - 흰색
+                        } else {
+                            ctx.fillStyle = '#ffffff'; // 주어 - 흰색
+                        }
+                    } else {
+                        // 순서 바뀜 완료: 주어(흰색) + 조동사(파란색)
+                        const subjectLength = clone.subjectWord.length;
+                        const spaceLength = 1;
+                        
+                        if (index < subjectLength) {
+                            ctx.fillStyle = '#ffffff'; // 주어 - 흰색
+                        } else if (index < subjectLength + spaceLength) {
+                            ctx.fillStyle = '#ffffff'; // 공백 - 흰색
+                        } else {
+                            ctx.fillStyle = '#40b8ff'; // 조동사 - 파란색
+                        }
+                    }
+                    ctx.fillText(charPos.char, charPos.x, charPos.currentY);
+                });
+            }
         });
           ctx.restore();
     }
@@ -2695,10 +3001,14 @@ function update(delta) {
   if (verbClones.length > 0) {
     updateVerbClones(performance.now());
   }
-  
-  // Update bounce animations
+    // Update bounce animations
   if (activeBounceAnimations.length > 0) {
     updateBounceAnimations(performance.now());
+  }
+  
+  // Update arrow animation
+  if (arrowAnimationActive) {
+    updateArrowAnimation(performance.now());
   }
 }
 
